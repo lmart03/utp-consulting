@@ -23,7 +23,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.security.oauth2.client.registration.google.client-id=test-client-id",
         "spring.security.oauth2.client.registration.google.client-secret=test-client-secret",
         "app.gemini.api-key=",
-        "app.jira.api-token="
+        "app.jira.api-token=",
+        "assistant.polling.enabled=false"
 })
 @AutoConfigureMockMvc
 class UtpAssistantApplicationTests {
@@ -101,7 +102,8 @@ class UtpAssistantApplicationTests {
                 .andExpect(header().string("Location", allOf(
                         containsString("access_type=offline"),
                         containsString("prompt=consent"),
-                        containsString("gmail.readonly"),
+                        containsString("gmail.modify"),
+                        containsString("calendar.events"),
                         containsString("redirect_uri=http://localhost/login/oauth2/code/google"))));
     }
 

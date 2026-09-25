@@ -26,8 +26,24 @@ spring:
               - openid
               - profile
               - email
-              - https://www.googleapis.com/auth/gmail.readonly
+              # gmail.modify incluye lectura y permite quitar UNREAD (no permite enviar ni borrar definitivamente).
+              - https://www.googleapis.com/auth/gmail.modify
               - https://www.googleapis.com/auth/calendar.events
+
+assistant:
+  polling:
+    enabled: ${ASSISTANT_POLLING_ENABLED:true}
+    delay-ms: 10000
+  automation:
+    # false: solo correos recibidos (internalDate de Gmail) después de automationStartedAt (arranque del backend).
+    process-old-emails: false
+    gmail-query: "in:inbox is:unread"
+    max-results: 10
+    processing-lease: 10m
+  processing:
+    max-retries: 3
+    retry-delays: 1m,5m,15m
+    mark-read-retry-delay: 1m
 
 server:
   port: 8080

@@ -6,6 +6,8 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import com.google.api.client.googleapis.json.GoogleJsonError;
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
@@ -18,6 +20,7 @@ import com.google.api.services.calendar.Calendar;
 import com.google.api.services.calendar.model.Event;
 import com.google.api.services.calendar.model.EventAttendee;
 import com.google.api.services.calendar.model.EventDateTime;
+import com.google.api.services.calendar.model.Events;
 import com.utp.assistant.config.CalendarProperties;
 import com.utp.assistant.config.GmailProperties;
 import com.utp.assistant.dto.CalendarEventRequest;
@@ -39,7 +42,9 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class GoogleCalendarService {
 
-    static final String CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+    public static final String CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+    /** Clave de extendedProperties.private que vincula el evento con el correo de origen (idempotencia). */
+    static final String GMAIL_MESSAGE_ID_PROPERTY = "gmailMessageId";
     private static final HttpTransport HTTP_TRANSPORT = new NetHttpTransport();
 
     private final GoogleTokenService tokenService;
@@ -47,8 +52,20 @@ public class GoogleCalendarService {
     private final GmailProperties gmailProperties;
 
     public CalendarEventResponse createEvent(Authentication authentication, CalendarEventRequest request) {
+        return createEvent(tokenService.getAccessTokenWithScope(authentication, CALENDAR_EVENTS_SCOPE), request, null);
+    }
+
+    /**
+     * Crea el evento con un access token explícito (automatización). Si se indica gmailMessageId se guarda en
+     * extendedProperties.private para poder detectar el evento si hay que reintentar.
+     */
+    public CalendarEventResponse createEvent(String accessToken, CalendarEventRequest request, String gmailMessageId) {
         Event event = buildEvent(request);
-        Calendar calendar = buildClient(tokenService.getAccessTokenWithScope(authentication, CALENDAR_EVENTS_SCOPE));
+        if (gmailMessageId != null) {
+            event.setExtendedProperties(new Event.ExtendedProperties()
+                    .setPrivate(Map.of(GMAIL_MESSAGE_ID_PROPERTY, gmailMessageId)));
+        }
+        Calendar calendar = buildClient(accessToken);
 
         Event created;
         try {
@@ -63,13 +80,34 @@ public class GoogleCalendarService {
         }
 
         log.info("Evento creado en Google Calendar: id={}, inicio={}", created.getId(), request.startDateTime());
+        return toResponse(created);
+    }
+
+    /** Busca un evento creado previamente para ese correo (extendedProperties.private.gmailMessageId). */
+    public Optional<CalendarEventResponse> findEventByGmailMessageId(String accessToken, String gmailMessageId) {
+        try {
+            Events events = buildClient(accessToken).events().list(properties.calendarId())
+                    .setPrivateExtendedProperty(List.of(GMAIL_MESSAGE_ID_PROPERTY + "=" + gmailMessageId))
+                    .setShowDeleted(false)
+                    .setMaxResults(1)
+                    .execute();
+            if (events == null || events.getItems() == null || events.getItems().isEmpty()) {
+                return Optional.empty();
+            }
+            return Optional.of(toResponse(events.getItems().getFirst()));
+        } catch (IOException ex) {
+            throw translate(ex);
+        }
+    }
+
+    private static CalendarEventResponse toResponse(Event event) {
         return new CalendarEventResponse(
-                created.getId(),
-                created.getHtmlLink(),
-                created.getStatus(),
-                created.getSummary(),
-                formatDateTime(created.getStart()),
-                formatDateTime(created.getEnd()));
+                event.getId(),
+                event.getHtmlLink(),
+                event.getStatus(),
+                event.getSummary(),
+                formatDateTime(event.getStart()),
+                formatDateTime(event.getEnd()));
     }
 
     /** Valida las fechas y arma el Event. Sin llamadas a Google. */

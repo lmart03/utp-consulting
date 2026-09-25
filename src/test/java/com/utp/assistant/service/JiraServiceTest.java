@@ -101,6 +101,28 @@ class JiraServiceTest {
     }
 
     @Test
+    void labelsAreSentOnlyWhenProvided() {
+        assertThat(fields(service.buildIssuePayload(new JiraIssueRequest("S", "D", null)))).doesNotContainKey("labels");
+        assertThat(fields(service.buildIssuePayload(new JiraIssueRequest("S", "D", null), java.util.List.of("utp-gmail-abc"))))
+                .containsEntry("labels", java.util.List.of("utp-gmail-abc"));
+    }
+
+    @Test
+    void findsIssueByLabelWithJqlSearch() {
+        server.expect(org.springframework.test.web.client.match.MockRestRequestMatchers.requestToUriTemplate(
+                        BASE_URL + "/rest/api/3/search/jql?jql={jql}&fields=summary&maxResults=1",
+                        "project = \"SCRUM\" AND labels = \"utp-gmail-abc\" ORDER BY created ASC"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {"issues":[{"id":"10030","key":"SCRUM-7","self":"s","fields":{"summary":"Seguimiento"}}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThat(service.findIssueByLabel("utp-gmail-abc")).contains(new JiraIssueResponse(
+                "10030", "SCRUM-7", "s", "https://utp-tics.atlassian.net/browse/SCRUM-7", "Seguimiento"));
+        server.verify();
+    }
+
+    @Test
     void invalidIssueTypeErrorListsAvailableTypes() {
         server.expect(requestTo(BASE_URL + "/rest/api/3/issue"))
                 .andRespond(withStatus(HttpStatus.BAD_REQUEST).contentType(MediaType.APPLICATION_JSON)

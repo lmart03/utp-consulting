@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -71,12 +72,17 @@ public class JiraService {
 
     /** POST /rest/api/3/issue con description en Atlassian Document Format. */
     public JiraIssueResponse createIssue(JiraIssueRequest request) {
+        return createIssue(request, List.of());
+    }
+
+    /** Igual que {@link #createIssue(JiraIssueRequest)} agregando labels (ej. referencia al correo de origen). */
+    public JiraIssueResponse createIssue(JiraIssueRequest request, List<String> labels) {
         requireConfigured();
         JiraCreatedIssue created;
         try {
             created = jiraRestClient.post()
                     .uri("/rest/api/3/issue")
-                    .body(buildIssuePayload(request))
+                    .body(buildIssuePayload(request, labels))
                     .retrieve()
                     .body(JiraCreatedIssue.class);
         } catch (RestClientResponseException ex) {
@@ -92,8 +98,41 @@ public class JiraService {
         return new JiraIssueResponse(created.id(), created.key(), created.self(), browseUrl(created.key()), request.summary());
     }
 
-    /** Payload de creación: project, summary, description (ADF), issuetype y priority solo si viene informada. */
+    /**
+     * Busca la issue del proyecto con ese label (JQL vía GET /rest/api/3/search/jql). Se usa antes de reintentar
+     * una creación dudosa. Nota: el índice de búsqueda de Jira puede tardar unos segundos en reflejar issues nuevas.
+     */
+    public Optional<JiraIssueResponse> findIssueByLabel(String label) {
+        requireConfigured();
+        String jql = "project = \"" + properties.projectKey() + "\" AND labels = \"" + label + "\" ORDER BY created ASC";
+        try {
+            JiraSearchResult result = jiraRestClient.get()
+                    .uri(uri -> uri.path("/rest/api/3/search/jql")
+                            .queryParam("jql", "{jql}")
+                            .queryParam("fields", "summary")
+                            .queryParam("maxResults", 1)
+                            .build(jql))
+                    .retrieve()
+                    .body(JiraSearchResult.class);
+            if (result == null || result.issues() == null || result.issues().isEmpty()) {
+                return Optional.empty();
+            }
+            JiraFoundIssue issue = result.issues().getFirst();
+            String summary = issue.fields() == null ? null : issue.fields().summary();
+            return Optional.of(new JiraIssueResponse(issue.id(), issue.key(), issue.self(), browseUrl(issue.key()), summary));
+        } catch (RestClientResponseException ex) {
+            throw translate(ex, "buscar issues por label en el proyecto " + properties.projectKey());
+        } catch (ResourceAccessException ex) {
+            throw unreachable(ex);
+        }
+    }
+
     Map<String, Object> buildIssuePayload(JiraIssueRequest request) {
+        return buildIssuePayload(request, List.of());
+    }
+
+    /** Payload de creación: project, summary, description (ADF), issuetype; priority y labels solo si vienen. */
+    Map<String, Object> buildIssuePayload(JiraIssueRequest request, List<String> labels) {
         Map<String, Object> fields = new LinkedHashMap<>();
         fields.put("project", Map.of("key", properties.projectKey()));
         fields.put("summary", request.summary().strip());
@@ -101,6 +140,9 @@ public class JiraService {
         fields.put("issuetype", Map.of("name", properties.issueType()));
         if (request.priority() != null && !request.priority().isBlank()) {
             fields.put("priority", Map.of("name", request.priority().strip()));
+        }
+        if (labels != null && !labels.isEmpty()) {
+            fields.put("labels", List.copyOf(labels));
         }
         return Map.of("fields", fields);
     }
@@ -191,6 +233,18 @@ public class JiraService {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     record JiraProject(String key, List<JiraIssueTypeDto> issueTypes) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record JiraSearchResult(List<JiraFoundIssue> issues) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record JiraFoundIssue(String id, String key, String self, JiraIssueFields fields) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record JiraIssueFields(String summary) {
     }
 
     /** Formato estándar de error de Jira: {"errorMessages": [...], "errors": {"campo": "mensaje"}}. */

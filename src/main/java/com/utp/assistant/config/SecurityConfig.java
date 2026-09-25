@@ -21,27 +21,29 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 @Configuration
-@EnableConfigurationProperties({GmailProperties.class, CalendarProperties.class})
+@EnableConfigurationProperties({GmailProperties.class, CalendarProperties.class, AssistantProperties.class})
 public class SecurityConfig {
 
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http,
             OAuth2AuthorizationRequestResolver authorizationRequestResolver,
-            @Value("${app.security.login-success-url}") String loginSuccessUrl) throws Exception {
+            GoogleLoginSuccessHandler loginSuccessHandler) throws Exception {
         http
                 .cors(Customizer.withDefaults())
                 // CSRF activo (la sesión viaja en cookie). TEMPORAL (solo desarrollo, para Postman):
-                // /api/assistant/**, /api/calendar/** y /api/jira/** quedan sin CSRF y sin exigir login en el filtro.
+                // /api/assistant/**, /api/calendar/**, /api/jira/** y /api/automation/** quedan sin CSRF y sin
+                // exigir login en el filtro.
                 // Calendar igualmente necesita la sesión de Google (cookie JSESSIONID) para obtener el token.
                 // Jira usa sus propias credenciales (API token) y no depende de Google.
                 // Revertir antes de producción.
                 .csrf(csrf -> csrf.ignoringRequestMatchers(
                         PathPatternRequestMatcher.withDefaults().matcher("/api/assistant/**"),
                         PathPatternRequestMatcher.withDefaults().matcher("/api/calendar/**"),
-                        PathPatternRequestMatcher.withDefaults().matcher("/api/jira/**")))
+                        PathPatternRequestMatcher.withDefaults().matcher("/api/jira/**"),
+                        PathPatternRequestMatcher.withDefaults().matcher("/api/automation/**")))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/", "/error", "/oauth2/**", "/login/**", "/api/assistant/**",
-                                "/api/calendar/**", "/api/jira/**").permitAll()
+                                "/api/calendar/**", "/api/jira/**", "/api/automation/**").permitAll()
                         // Documentación OpenAPI / Swagger UI (solo lectura).
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/api/**").authenticated()
@@ -53,7 +55,8 @@ public class SecurityConfig {
                 .oauth2Login(oauth2 -> oauth2
                         .authorizationEndpoint(
                                 endpoint -> endpoint.authorizationRequestResolver(authorizationRequestResolver))
-                        .defaultSuccessUrl(loginSuccessUrl, true));
+                        // Registra la cuenta Google para la automatización y redirige a login-success-url.
+                        .successHandler(loginSuccessHandler));
         return http.build();
     }
 
