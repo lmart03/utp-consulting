@@ -26,7 +26,7 @@ spring:
               - openid
               - profile
               - email
-              # gmail.modify incluye lectura y permite quitar UNREAD (no permite enviar ni borrar definitivamente).
+              # gmail.modify: lectura, quitar UNREAD y enviar las respuestas aprobadas (no permite borrar definitivamente).
               - https://www.googleapis.com/auth/gmail.modify
               - https://www.googleapis.com/auth/calendar.events
 
@@ -72,6 +72,10 @@ app:
     issue-type: ${JIRA_ISSUE_TYPE:Task}
     connect-timeout: 10s
     read-timeout: 30s
+  reply:
+    # Borradores de respuesta con IA. Nunca se envían solos: el usuario los revisa y envía desde el dashboard.
+    enabled: ${REPLY_ENABLED:true}
+    signature: ${REPLY_SIGNATURE:Equipo UTP Consult}
   gemini:
     # Nunca se registra ni se expone. Vacía => el endpoint /api/assistant responde 503 (Gmail sigue funcionando).
     api-key: ${GEMINI_API_KEY:}

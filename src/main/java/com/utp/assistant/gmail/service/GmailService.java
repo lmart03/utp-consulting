@@ -1,8 +1,10 @@
 package com.utp.assistant.gmail.service;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
@@ -13,6 +15,7 @@ import com.google.api.client.json.gson.GsonFactory;
 import com.google.api.services.gmail.Gmail;
 import com.google.api.services.gmail.model.ListMessagesResponse;
 import com.google.api.services.gmail.model.Message;
+import com.google.api.services.gmail.model.MessagePartHeader;
 import com.google.api.services.gmail.model.ModifyMessageRequest;
 import com.utp.assistant.auth.exception.GmailAuthorizationException;
 import com.utp.assistant.auth.exception.GoogleScopeMissingException;
@@ -28,7 +31,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * Acceso a Gmail de la cuenta autenticada usando el access token gestionado por Spring Security.
- * Los endpoints manuales son de solo lectura; la automatización además quita la etiqueta UNREAD (gmail.modify).
+ * Los endpoints manuales son de solo lectura; la automatización además quita la etiqueta UNREAD (gmail.modify) y
+ * las respuestas revisadas por el usuario se envían con sendReply.
  */
 @Slf4j
 @Service
@@ -88,6 +92,43 @@ public class GmailService {
         } catch (IOException ex) {
             throw translate(ex, messageId);
         }
+    }
+
+    /**
+     * Envía una respuesta en el hilo del mensaje original (users.messages.send). gmail.modify permite enviar.
+     * Lee el header Message-ID del original para enlazar la respuesta con In-Reply-To/References.
+     *
+     * @return id de Gmail del mensaje enviado
+     */
+    public String sendReply(String accessToken, String originalMessageId, String threadId, String to,
+                            String subject, String body) {
+        Gmail gmail = buildClient(accessToken);
+        try {
+            Message original = gmail.users().messages().get(USER_ID, originalMessageId)
+                    .setFormat("metadata")
+                    .setMetadataHeaders(List.of("Message-ID", "References"))
+                    .execute();
+            String raw = ReplyMimeBuilder.build(to, subject, header(original, "Message-ID"), header(original, "References"), body);
+            Message message = new Message()
+                    .setRaw(Base64.getUrlEncoder().encodeToString(raw.getBytes(StandardCharsets.UTF_8)))
+                    .setThreadId(threadId != null ? threadId : original.getThreadId());
+            Message sent = gmail.users().messages().send(USER_ID, message).execute();
+            log.info("Respuesta enviada en el hilo {} (mensaje {})", message.getThreadId(), sent.getId());
+            return sent.getId();
+        } catch (IOException ex) {
+            throw translate(ex, originalMessageId);
+        }
+    }
+
+    private static String header(Message message, String name) {
+        if (message.getPayload() == null || message.getPayload().getHeaders() == null) {
+            return null;
+        }
+        return message.getPayload().getHeaders().stream()
+                .filter(h -> name.equalsIgnoreCase(h.getName()))
+                .map(MessagePartHeader::getValue)
+                .findFirst()
+                .orElse(null);
     }
 
     private List<String> listMessageIds(Gmail gmail, String query, int maxResults) {

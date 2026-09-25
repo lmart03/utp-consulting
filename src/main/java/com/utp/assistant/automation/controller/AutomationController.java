@@ -15,12 +15,16 @@ import com.utp.assistant.automation.dto.AutomationDtos.ProcessedEmailDto;
 import com.utp.assistant.automation.dto.AutomationDtos.RunResultDto;
 import com.utp.assistant.automation.dto.AutomationDtos.StatusDto;
 import com.utp.assistant.automation.entity.EmailAction;
+import com.utp.assistant.automation.entity.ProcessedEmail;
 import com.utp.assistant.automation.entity.ProcessedEmailStatus;
 import com.utp.assistant.automation.service.EmailAutomationService;
 import com.utp.assistant.automation.service.EmailAutomationService.CycleResult;
 import com.utp.assistant.automation.service.ProcessedEmailStore;
 import com.utp.assistant.calendar.config.CalendarProperties;
 import com.utp.assistant.jira.config.JiraProperties;
+import com.utp.assistant.reply.dto.EmailReplyDto;
+import com.utp.assistant.reply.entity.EmailReply;
+import com.utp.assistant.reply.service.ReplyService;
 import com.utp.assistant.shared.config.OpenApiConfig;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -55,6 +59,7 @@ public class AutomationController {
     private final JiraProperties jiraProperties;
     private final GeminiProperties geminiProperties;
     private final CalendarProperties calendarProperties;
+    private final ReplyService replyService;
 
     @Operation(summary = "Estado de la automatización",
             description = "Muestra si el polling está activo, el cutoff de correos, la cuenta Google usada y cuántos "
@@ -110,8 +115,10 @@ public class AutomationController {
     @GetMapping("/emails")
     public List<ProcessedEmailDto> emails(@Parameter(description = "Cantidad máxima.", example = "50")
                                          @RequestParam(defaultValue = "50") @Min(1) @Max(200) int limit) {
-        return store.latest(limit).stream()
-                .map(email -> ProcessedEmailDto.from(email, store.actions(email.getId())))
+        List<ProcessedEmail> emails = store.latest(limit);
+        Map<Long, EmailReply> replies = replyService.findByProcessedEmailIds(emails.stream().map(ProcessedEmail::getId).toList());
+        return emails.stream()
+                .map(email -> ProcessedEmailDto.from(email, store.actions(email.getId()), replies.get(email.getId())))
                 .toList();
     }
 
@@ -126,9 +133,11 @@ public class AutomationController {
         return store.findById(id)
                 .map(email -> {
                     List<EmailAction> actions = store.actions(id);
+                    EmailReply reply = replyService.findByProcessedEmailId(id).orElse(null);
                     return new ProcessedEmailDetailDto(
-                            ProcessedEmailDto.from(email, actions),
-                            actions.stream().map(a -> EmailActionDto.from(a, jiraProperties.normalizedBaseUrl())).toList());
+                            ProcessedEmailDto.from(email, actions, reply),
+                            actions.stream().map(a -> EmailActionDto.from(a, jiraProperties.normalizedBaseUrl())).toList(),
+                            reply != null ? EmailReplyDto.from(reply) : null);
                 })
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No existe el correo procesado " + id + "."));
     }

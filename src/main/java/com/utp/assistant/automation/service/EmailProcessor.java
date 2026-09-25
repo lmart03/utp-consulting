@@ -6,6 +6,7 @@ import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import com.utp.assistant.assistant.dto.AnalyzeEmailRequest;
@@ -14,6 +15,7 @@ import com.utp.assistant.assistant.dto.RequestedToolCall;
 import com.utp.assistant.assistant.service.GeminiService;
 import com.utp.assistant.auth.service.GoogleTokenService;
 import com.utp.assistant.automation.config.AssistantProperties;
+import com.utp.assistant.automation.dto.AutomationDtos.ProcessedEmailDto;
 import com.utp.assistant.automation.dto.AutomationEvent;
 import com.utp.assistant.automation.dto.AutomationEventStatus;
 import com.utp.assistant.automation.dto.AutomationStage;
@@ -21,16 +23,21 @@ import com.utp.assistant.automation.entity.EmailAction;
 import com.utp.assistant.automation.entity.EmailActionStatus;
 import com.utp.assistant.automation.entity.ProcessedEmail;
 import com.utp.assistant.automation.entity.ProcessedEmailStatus;
+import com.utp.assistant.calendar.config.CalendarProperties;
 import com.utp.assistant.gmail.dto.GmailMessageDto;
 import com.utp.assistant.gmail.service.GmailService;
 import com.utp.assistant.gmail.service.ReceivedEmail;
+import com.utp.assistant.reply.entity.EmailReply;
+import com.utp.assistant.reply.entity.ReplyStatus;
+import com.utp.assistant.reply.service.ReplyDraftCommand;
+import com.utp.assistant.reply.service.ReplyService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
  * Procesa un correo ya reclamado: Gemini → registrar acciones → ejecutar solo las pendientes/fallidas →
- * estado final → marcar leído en Gmail solo si todo terminó bien. Emite eventos de observabilidad en cada etapa.
+ * estado final → borrador de respuesta → marcar leído en Gmail solo si todo terminó bien. Emite eventos de observabilidad en cada etapa.
  */
 @Slf4j
 @Service
@@ -49,6 +56,8 @@ public class EmailProcessor {
     private final GoogleTokenService tokenService;
     private final AssistantProperties properties;
     private final AutomationEventPublisher publisher;
+    private final ReplyService replyService;
+    private final CalendarProperties calendarProperties;
 
     /**
      * @param received contenido del correo si ya se leyó en este ciclo; null en reintentos (se vuelve a leer de
@@ -141,6 +150,10 @@ public class EmailProcessor {
         ProcessedEmail finished = store.finishAttempt(email.getId());
         log.info("Correo {} ('{}') → {}", messageId, email.getSubject(), finished.getStatus());
 
+        if (finished.getStatus() == ProcessedEmailStatus.PROCESSED) {
+            prepareReply(finished, received, principalName);
+        }
+
         if (finished.getStatus() == ProcessedEmailStatus.PROCESSED || finished.getStatus() == ProcessedEmailStatus.IGNORED) {
             markRead(finished, principalName);
         }
@@ -181,6 +194,91 @@ public class EmailProcessor {
                     .stage(AutomationStage.MARK_READ_FAILED)
                     .status(AutomationEventStatus.FAILED)
                     .message("No se pudo marcar el correo como leído")
+                    .error(sanitizeError(ex.getMessage()))
+                    .build());
+        }
+    }
+
+    /**
+     * Borrador de respuesta con IA, solo cuando todas las acciones terminaron bien (así puede citar el ticket y la
+     * reunión). Nunca se envía: queda en DRAFT para que el usuario lo revise. Un fallo aquí no afecta al correo.
+     */
+    private void prepareReply(ProcessedEmail email, ReceivedEmail received, String principalName) {
+        if (!replyService.isEnabled()) {
+            return;
+        }
+        try {
+            Optional<String> skipReason = replyService.skipReason(email.getFromAddress());
+            if (skipReason.isPresent()) {
+                publisher.publish(AutomationEvent.builder()
+                        .processedEmailId(email.getId())
+                        .gmailMessageId(email.getGmailMessageId())
+                        .stage(AutomationStage.REPLY_DRAFT_SKIPPED)
+                        .status(AutomationEventStatus.SKIPPED)
+                        .message(skipReason.get())
+                        .build());
+                return;
+            }
+            if (replyService.findByProcessedEmailId(email.getId()).filter(r -> r.getStatus() != ReplyStatus.FAILED).isPresent()) {
+                return;
+            }
+
+            publisher.publish(AutomationEvent.builder()
+                    .processedEmailId(email.getId())
+                    .gmailMessageId(email.getGmailMessageId())
+                    .stage(AutomationStage.REPLY_DRAFT_STARTED)
+                    .status(AutomationEventStatus.PROCESSING)
+                    .message("Redactando respuesta sugerida")
+                    .build());
+
+            ProcessedEmailDto summary = ProcessedEmailDto.from(email, store.actions(email.getId()));
+            EmailReply reply = replyService.createDraft(new ReplyDraftCommand(
+                    email.getId(),
+                    email.getGmailMessageId(),
+                    email.getThreadId(),
+                    email.getFromAddress(),
+                    email.getSubject(),
+                    email.getAiSummary(),
+                    ReplyFacts.from(summary, calendarProperties.timeZone()),
+                    received != null ? received.message() : null,
+                    principalName));
+
+            if (reply.getStatus() == ReplyStatus.FAILED) {
+                publisher.publish(AutomationEvent.builder()
+                        .processedEmailId(email.getId())
+                        .gmailMessageId(email.getGmailMessageId())
+                        .stage(AutomationStage.REPLY_DRAFT_FAILED)
+                        .status(AutomationEventStatus.FAILED)
+                        .message("No se pudo redactar la respuesta sugerida")
+                        .error(sanitizeError(reply.getErrorMessage()))
+                        .metadata(Map.of("replyId", reply.getId()))
+                        .build());
+                return;
+            }
+
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("replyId", reply.getId());
+            metadata.put("status", reply.getStatus().name());
+            metadata.put("to", reply.getToAddress());
+            metadata.put("subject", reply.getSubject());
+            metadata.put("body", reply.getBody());
+            publisher.publish(AutomationEvent.builder()
+                    .processedEmailId(email.getId())
+                    .gmailMessageId(email.getGmailMessageId())
+                    .stage(AutomationStage.REPLY_DRAFT_COMPLETED)
+                    .status(AutomationEventStatus.SUCCESS)
+                    .externalId(String.valueOf(reply.getId()))
+                    .message("Respuesta sugerida lista para revisar")
+                    .metadata(metadata)
+                    .build());
+        } catch (RuntimeException ex) {
+            log.warn("No se pudo preparar la respuesta del correo {}: {}", email.getGmailMessageId(), ex.getMessage());
+            publisher.publish(AutomationEvent.builder()
+                    .processedEmailId(email.getId())
+                    .gmailMessageId(email.getGmailMessageId())
+                    .stage(AutomationStage.REPLY_DRAFT_FAILED)
+                    .status(AutomationEventStatus.FAILED)
+                    .message("No se pudo redactar la respuesta sugerida")
                     .error(sanitizeError(ex.getMessage()))
                     .build());
         }

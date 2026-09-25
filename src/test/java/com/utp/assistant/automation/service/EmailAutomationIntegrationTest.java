@@ -40,6 +40,10 @@ import com.utp.assistant.gmail.service.ReceivedEmail;
 import com.utp.assistant.jira.dto.JiraIssueRequest;
 import com.utp.assistant.jira.dto.JiraIssueResponse;
 import com.utp.assistant.jira.service.JiraService;
+import com.utp.assistant.reply.entity.EmailReply;
+import com.utp.assistant.reply.entity.ReplyStatus;
+import com.utp.assistant.reply.repository.EmailReplyRepository;
+import com.utp.assistant.assistant.dto.ReplyDraftRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -106,9 +110,12 @@ class EmailAutomationIntegrationTest {
     private ProspectRepository prospectRepository;
     @Autowired
     private ProspectInteractionRepository interactionRepository;
+    @Autowired
+    private EmailReplyRepository replyRepository;
 
     @BeforeEach
     void setUp() {
+        replyRepository.deleteAll();
         actionRepository.deleteAll();
         emailRepository.deleteAll();
         interactionRepository.deleteAll();
@@ -157,6 +164,59 @@ class EmailAutomationIntegrationTest {
         assertThat(jiraRequest.getValue().description()).contains("UTP-GMAIL-ID: m1");
         verify(calendarService).createEvent(eq(TOKEN), any(CalendarEventRequest.class), eq("m1"));
         verify(gmailService).markAsRead(TOKEN, "m1");
+    }
+
+    @Test
+    void processedEmailGetsReplyDraftWithExactFactsButIsNeverSentAutomatically() {
+        inbox(email("m1", Instant.now()));
+        when(geminiService.analyzeEmail(any())).thenReturn(meetingAnalysis());
+        when(geminiService.draftReply(any())).thenReturn("Hola Ana, confirmamos la reunión.\n\nEquipo UTP Consult");
+
+        automationService.runCycle();
+        automationService.runCycle();
+
+        EmailReply reply = replyRepository.findAll().getFirst();
+        assertThat(replyRepository.count()).isEqualTo(1);
+        assertThat(reply.getStatus()).isEqualTo(ReplyStatus.DRAFT);
+        assertThat(reply.getToAddress()).isEqualTo("ana.torres@techcorp.com");
+        assertThat(reply.getSubject()).isEqualTo("Re: Reunión módulo de pagos TechCorp");
+        assertThat(reply.getBody()).startsWith("Hola Ana");
+
+        ArgumentCaptor<ReplyDraftRequest> request = ArgumentCaptor.forClass(ReplyDraftRequest.class);
+        verify(geminiService, times(1)).draftReply(request.capture());
+        assertThat(request.getValue().body()).contains("lunes 28 de septiembre");
+        assertThat(request.getValue().facts()).anyMatch(f -> f.contains("SCRUM-6"));
+        assertThat(request.getValue().facts()).anyMatch(f -> f.startsWith("Reunión agendada: lunes 28 de septiembre de 2026, de 3:00"));
+        verify(gmailService, never()).sendReply(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void replyDraftFailureDoesNotAffectTheProcessedEmail() {
+        inbox(email("m1", Instant.now()));
+        when(geminiService.analyzeEmail(any())).thenReturn(meetingAnalysis());
+        when(geminiService.draftReply(any())).thenThrow(new GeminiApiException(HttpStatus.SERVICE_UNAVAILABLE, "Saturado"));
+
+        automationService.runCycle();
+
+        ProcessedEmail email = emailRepository.findByGmailMessageId("m1").orElseThrow();
+        assertThat(email.getStatus()).isEqualTo(ProcessedEmailStatus.PROCESSED);
+        assertThat(email.isGmailMarkedRead()).isTrue();
+        EmailReply reply = replyRepository.findByProcessedEmailId(email.getId()).orElseThrow();
+        assertThat(reply.getStatus()).isEqualTo(ReplyStatus.FAILED);
+        assertThat(reply.getErrorMessage()).contains("Saturado");
+    }
+
+    @Test
+    void automatedSendersDoNotGetReplyDrafts() {
+        ReceivedEmail noReply = new ReceivedEmail(new GmailMessageDto("m9", "m9", "Plataforma <no-reply@plataforma.com>",
+                "Reunión de soporte", "Fri, 25 Sep 2026 12:33:19 -0500", "Hola", "Reunión el lunes a las 3 p. m."), Instant.now());
+        inbox(noReply);
+        when(geminiService.analyzeEmail(any())).thenReturn(meetingAnalysis());
+
+        automationService.runCycle();
+
+        assertThat(replyRepository.count()).isZero();
+        verify(geminiService, never()).draftReply(any());
     }
 
     @Test

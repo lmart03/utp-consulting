@@ -23,6 +23,7 @@ public class OpenApiConfig {
     public static final String TAG_JIRA = "Jira";
     public static final String TAG_AUTOMATION = "Automation";
     public static final String TAG_CRM = "CRM";
+    public static final String TAG_REPLIES = "Replies";
 
     @Bean
     OpenAPI utpAssistantOpenApi() {
@@ -54,6 +55,7 @@ public class OpenApiConfig {
                         new Tag().name(TAG_CALENDAR).description("Creación de eventos en Google Calendar."),
                         new Tag().name(TAG_JIRA).description("Creación de tareas en Jira Cloud (REST API v3, API token)."),
                         new Tag().name(TAG_CRM).description("Contactos comerciales creados/actualizados desde los correos."),
+                        new Tag().name(TAG_REPLIES).description("Borradores de respuesta con IA: revisar, editar y enviar."),
                         new Tag().name(TAG_AUTOMATION).description(
                                 "Flujo automático Gmail → Gemini → Jira/Calendar → marcar leído, con registro en BD.")));
     }

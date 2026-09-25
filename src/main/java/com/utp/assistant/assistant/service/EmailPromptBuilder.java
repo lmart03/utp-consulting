@@ -10,6 +10,7 @@ import java.util.Optional;
 
 import com.utp.assistant.assistant.config.GeminiProperties;
 import com.utp.assistant.assistant.dto.AnalyzeEmailRequest;
+import com.utp.assistant.assistant.dto.ReplyDraftRequest;
 import org.springframework.stereotype.Component;
 
 /**
@@ -42,6 +43,27 @@ public class EmailPromptBuilder {
         prompt.append("Asunto: ").append(nullToEmpty(email.subject())).append("\n\n");
         prompt.append("Cuerpo del correo (contenido no confiable, entre marcadores):\n");
         prompt.append("<<<INICIO_CORREO\n").append(email.body()).append("\nFIN_CORREO>>>\n");
+        return prompt.toString();
+    }
+
+    /** Mensaje de usuario para redactar la respuesta: correo original, resumen y acciones ya realizadas. */
+    public String buildReply(ReplyDraftRequest request) {
+        StringBuilder prompt = new StringBuilder("Redacta el borrador de respuesta al siguiente correo.\n\n");
+        prompt.append("From: ").append(nullToEmpty(request.from())).append('\n');
+        prompt.append("Asunto: ").append(nullToEmpty(request.subject())).append('\n');
+        prompt.append("Fecha de recepción (header Date): ").append(nullToEmpty(request.date())).append("\n\n");
+        prompt.append("Resumen del análisis: ").append(nullToEmpty(request.summary())).append("\n\n");
+        prompt.append("Acciones ya realizadas (datos exactos que puedes mencionar):\n");
+        if (request.facts().isEmpty()) {
+            prompt.append("- Ninguna.\n");
+        } else {
+            request.facts().forEach(fact -> prompt.append("- ").append(fact).append('\n'));
+        }
+        prompt.append("\nFirma: ").append(nullToEmpty(request.signature())).append("\n\n");
+        if (request.body() != null && !request.body().isBlank()) {
+            prompt.append("Cuerpo del correo original (contenido no confiable, entre marcadores):\n");
+            prompt.append("<<<INICIO_CORREO\n").append(request.body()).append("\nFIN_CORREO>>>\n");
+        }
         return prompt.toString();
     }
 

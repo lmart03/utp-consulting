@@ -11,6 +11,9 @@ import com.utp.assistant.automation.entity.EmailAction;
 import com.utp.assistant.automation.entity.EmailActionStatus;
 import com.utp.assistant.automation.entity.ProcessedEmail;
 import com.utp.assistant.automation.entity.ProcessedEmailStatus;
+import com.utp.assistant.reply.dto.EmailReplyDto;
+import com.utp.assistant.reply.entity.EmailReply;
+import com.utp.assistant.reply.entity.ReplyStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
@@ -74,6 +77,8 @@ public final class AutomationDtos {
             @Schema(description = "Id del contacto CRM creado/actualizado por este correo.", example = "3") Long crmProspectId,
             @Schema(example = "Carla Mendoza") String crmContactName,
             @Schema(example = "MEETING_SCHEDULED") String crmStatus,
+            @Schema(description = "Id de la respuesta sugerida por la IA.", example = "5") Long replyId,
+            @Schema(description = "Estado de la respuesta sugerida.", example = "DRAFT") ReplyStatus replyStatus,
             OffsetDateTime createdAt,
             OffsetDateTime updatedAt) {
 
@@ -82,6 +87,10 @@ public final class AutomationDtos {
         }
 
         public static ProcessedEmailDto from(ProcessedEmail e, List<EmailAction> actions) {
+            return from(e, actions, null);
+        }
+
+        public static ProcessedEmailDto from(ProcessedEmail e, List<EmailAction> actions, EmailReply reply) {
             String detectedCompany = extractCompany(actions);
             String jiraIssueKey = null;
             String meetingStart = null;
@@ -130,6 +139,7 @@ public final class AutomationDtos {
                     e.getSubject(), e.getReceivedAt(), e.getStatus(), e.getAttemptCount(), e.getNextRetryAt(),
                     e.getErrorMessage(), e.getAiSummary(), detectedCompany, e.isGmailMarkedRead(), e.getProcessedAt(),
                     elapsedMs, jiraIssueKey, meetingStart, meetingEnd, crmProspectId, crmContactName, crmStatus,
+                    reply != null ? reply.getId() : null, reply != null ? reply.getStatus() : null,
                     e.getCreatedAt(), e.getUpdatedAt());
         }
     }
@@ -174,7 +184,8 @@ public final class AutomationDtos {
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     @Schema(name = "ProcessedEmailDetail", description = "Correo procesado con todas sus acciones.")
-    public record ProcessedEmailDetailDto(ProcessedEmailDto email, List<EmailActionDto> actions) {
+    public record ProcessedEmailDetailDto(ProcessedEmailDto email, List<EmailActionDto> actions,
+                                          @Schema(description = "Respuesta sugerida por la IA (si existe).") EmailReplyDto reply) {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

@@ -13,6 +13,8 @@ import com.utp.assistant.gmail.exception.GmailMessageNotFoundException;
 import com.utp.assistant.gmail.exception.MimeDecodingException;
 import com.utp.assistant.jira.exception.JiraApiException;
 import com.utp.assistant.jira.exception.JiraNotConfiguredException;
+import com.utp.assistant.reply.exception.InvalidReplyStateException;
+import com.utp.assistant.reply.exception.ReplyNotFoundException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -81,6 +83,16 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(ProspectNotFoundException.class)
     ProblemDetail handleProspectNotFound(ProspectNotFoundException ex) {
         return problem(HttpStatus.NOT_FOUND, "Prospecto no encontrado", ex.getMessage());
+    }
+
+    @ExceptionHandler(ReplyNotFoundException.class)
+    ProblemDetail handleReplyNotFound(ReplyNotFoundException ex) {
+        return problem(HttpStatus.NOT_FOUND, "Respuesta no encontrada", ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidReplyStateException.class)
+    ProblemDetail handleInvalidReplyState(InvalidReplyStateException ex) {
+        return problem(HttpStatus.CONFLICT, "Estado de la respuesta", ex.getMessage());
     }
 
     @ExceptionHandler(JiraNotConfiguredException.class)
