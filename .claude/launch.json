@@ -1,0 +1,16 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "utp-consulting-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "C:/Users/lmart/Documents/dev/utp-consulting-frontend",
+        "run",
+        "start"
+      ],
+      "port": 4200
+    }
+  ]
+}

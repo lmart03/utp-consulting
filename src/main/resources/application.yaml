@@ -50,7 +50,8 @@ server:
 
 app:
   security:
-    login-success-url: /api/auth/me
+    # Adónde volver tras el login con Google. En desarrollo con el frontend Angular: http://localhost:4200/
+    login-success-url: ${LOGIN_SUCCESS_URL:/api/auth/me}
   cors:
     allowed-origins: http://localhost:4200
   gmail:
