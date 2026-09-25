@@ -1,0 +1,80 @@
+spring:
+  application:
+    name: utp-assistant
+  config:
+    # Carga variables locales desde .env (formato KEY=VALUE) si existe. Las variables de entorno reales tienen prioridad.
+    import: optional:file:.env[.properties]
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:2340}/${DB_NAME:utp_assistant}
+    username: ${DB_USERNAME:utp}
+    password: ${DB_PASSWORD:utp_dev_password}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            # El provider "google" lo aporta Spring Boot (CommonOAuth2Provider).
+            # redirect-uri por defecto: {baseUrl}/login/oauth2/code/{registrationId}
+            # => http://localhost:8080/login/oauth2/code/google
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+            scope:
+              - openid
+              - profile
+              - email
+              - https://www.googleapis.com/auth/gmail.readonly
+              - https://www.googleapis.com/auth/calendar.events
+
+server:
+  port: 8080
+
+app:
+  security:
+    login-success-url: /api/auth/me
+  cors:
+    allowed-origins: http://localhost:4200
+  gmail:
+    application-name: utp-assistant
+    unread-query: is:unread
+    max-results: 10
+  calendar:
+    calendar-id: primary
+    time-zone: America/Lima
+    # none = no envía invitaciones por email a los asistentes; all = sí las envía.
+    send-updates: none
+  jira:
+    # Nunca se registran ni se exponen email/token. Vacíos => /api/jira responde 503.
+    base-url: ${JIRA_BASE_URL:}
+    email: ${JIRA_EMAIL:}
+    api-token: ${JIRA_API_TOKEN:}
+    project-key: ${JIRA_PROJECT_KEY:}
+    issue-type: ${JIRA_ISSUE_TYPE:Task}
+    connect-timeout: 10s
+    read-timeout: 30s
+  gemini:
+    # Nunca se registra ni se expone. Vacía => el endpoint /api/assistant responde 503 (Gmail sigue funcionando).
+    api-key: ${GEMINI_API_KEY:}
+    # Flash-Lite estable, con Free Tier y soporte de Function Calling (menor demanda que 3.8/3.5 Flash).
+    model: ${GEMINI_MODEL:gemini-3.1-flash-lite}
+    # Se usan en orden si el principal responde 503 (saturado), 429 (sin cuota) o 404 (no disponible).
+    fallback-models: ${GEMINI_FALLBACK_MODELS:gemini-3.5-flash,gemini-3.8-flash}
+    # Intentos por modelo (incluye el primero); bajo para pasar rápido al respaldo.
+    retry-attempts: 2
+    timeout-ms: 60000
+    business-time-zone: America/Lima
+    system-instruction: classpath:prompts/email-analysis-system-instruction.txt
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    # Muestra los endpoints en el orden declarado y con duración de cada llamada.
+    operations-sorter: method
+    display-request-duration: true
+    try-it-out-enabled: true
+  default-produces-media-type: application/json
